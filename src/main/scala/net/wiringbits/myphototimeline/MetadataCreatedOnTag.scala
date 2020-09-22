@@ -2,69 +2,74 @@ package net.wiringbits.myphototimeline
 
 import java.time.LocalDate
 
+import cats.effect.Sync
+import cats.syntax.all._
 import com.drew.imaging.ImageMetadataReader
 
 import scala.jdk.CollectionConverters._
+import scala.util.{Failure, Try, Success}
 
 object MetadataCreatedOnTag {
   private val regex = """(\d\d\d\d).(\d\d).(\d\d).*""".r
   private val filenameRegex = """(\d\d\d\d)(\d\d)(\d\d)\D.*""".r
 
-  def getCreationDateFromFilename(sourceFile: os.Path): Option[LocalDate] = {
-    def f = {
-      sourceFile.last match {
+  def getCreationDateFromFilename[F[_]: Sync](sourceFile: os.Path): F[Option[LocalDate]] =
+    for {
+      filename <- Sync[F].delay(sourceFile.last)
+      result <- Sync[F].fromTry(filename match {
         case filenameRegex(year, month, day) =>
-          val date = LocalDate.of(year.toInt, month.toInt, day.toInt)
-          Some(date)
-        case _ => None
-      }
-    }
+          Try(Some(LocalDate.of(year.toInt, month.toInt, day.toInt))).recover { case _ => None }
+        case _ => util.Success(None)
+      })
+    } yield result
 
-    try f
-    catch {
-      case _: Throwable => None
-    }
-  }
-
-  def getCreationDate(sourceFile: os.Path): Option[LocalDate] = {
-    def f = {
-      val metadata = ImageMetadataReader.readMetadata(sourceFile.toIO)
-      val dates = metadata.getDirectories.asScala.flatMap { d =>
-        d.getTags.asScala
-          .filter { t =>
-            MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase)
+  def getCreationDate[F[_]: Sync](sourceFile: os.Path): F[Option[LocalDate]] =
+    (for {
+      metadata <- Sync[F].delay(ImageMetadataReader.readMetadata(sourceFile.toIO))
+      result <- Sync[F].delay(
+        metadata.getDirectories.asScala
+          .flatMap { d =>
+            d.getTags.asScala
+              .filter { t =>
+                MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase)
+              }
+              .map(_.getDescription)
+              .flatMap(Option.apply)
+              .flatMap(MetadataCreatedOnTag.toDate)
           }
-          .map(_.getDescription)
-          .flatMap(Option.apply)
-          .flatMap(MetadataCreatedOnTag.toDate)
-      }.toList
+          .toList
+          .headOption)
+    } yield result).flatMap(d => getCreationDateFromFilenameIfNotFoundInMetadata(d, sourceFile))
 
-      dates.headOption
-    }
-
-    val result = try f
-    catch {
-      case _: Throwable => None
-    }
-
-    result.orElse(getCreationDateFromFilename(sourceFile))
+/*
+  {
+    val metadata = ImageMetadataReader.readMetadata(sourceFile.toIO)
+    Try(metadata.getDirectories.asScala.flatMap { d =>
+      d.getTags.asScala
+        .filter { t =>
+          MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase)
+        }
+        .map(_.getDescription)
+        .flatMap(Option.apply)
+        .flatMap(MetadataCreatedOnTag.toDate)
+    }.toList)
+      .flatMap(xs => if (xs.isEmpty) Failure(new Throwable("No creation date found")) else Success(xs.head))
+      .toOption
   }
+*/
 
-  def toDate(str: String): Option[LocalDate] = {
-    def f = {
-      str match {
-        case MetadataCreatedOnTag.regex(year, month, day) =>
-          val date = LocalDate.of(year.toInt, month.toInt, day.toInt)
-          Some(date)
-        case _ => None
-      }
-    }
+  private def getCreationDateFromFilenameIfNotFoundInMetadata[F[_]: Sync](
+      date: Option[LocalDate],
+      sourceFile: os.Path) =
+    if (date.isDefined) Sync[F].pure(date) else getCreationDateFromFilename(sourceFile)
 
-    try f
-    catch {
-      case _: Throwable => None
+
+  def toDate(str: String): Option[LocalDate] =
+    str match {
+      case MetadataCreatedOnTag.regex(year, month, day) =>
+        Try(LocalDate.of(year.toInt, month.toInt, day.toInt)).toOption
+      case _ => None
     }
-  }
 
   //    val knownTags = List(
   //      "Date/Time", // 2014:08:31 14:31:24
@@ -76,7 +81,7 @@ object MetadataCreatedOnTag {
   //      "Digital Date Created" // 2015:06:27
   //      Creation Date - 2020-04-14T17:31:57-0600
   //    )
-  val names = List(
+  val names: List[String] = List(
     "Date/Time",
     "Date/Time Original",
     "Date/Time Digitized",

@@ -1,8 +1,12 @@
 package net.wiringbits.myphototimeline
 
-import java.nio.file.Path
+import java.nio.file.Paths
 
-import cats.data.Validated
+import cats.Traverse
+import cats.data.Validated.{Invalid, Valid}
+import cats.data.ValidatedNec
+import cats.effect.{ExitCode, Sync}
+import cats.syntax.all._
 import com.drew.imaging.ImageMetadataReader
 import com.monovore.decline.Opts
 
@@ -59,53 +63,47 @@ object CommandAppHelper {
       |""".stripMargin
   }
 
-  val sourceOpt: Opts[os.Path] = Opts
-    .option[Path](
-      long = "source",
-      help = "The root directory to pick the photos to organize recursively (absolute path)."
-    )
-    .mapValidated { nativePath =>
-      // for now, only absolute paths
-      try {
-        val path = os.Path(nativePath)
-        if (os.isDir(path)) {
-          Validated.valid(path)
-        } else {
-          Validated.invalidNel("source: It's not a directory, an absolute path is required")
-        }
-      } catch {
-        case ex: Throwable =>
-          Validated.invalidNel(ex.getMessage)
-      }
-    }
+  private def toDirPath[F[_]: Sync](pathStr: String, errMessage: String): F[ValidatedNec[String, String]] =
+    Sync[F]
+      .delay(os.Path(Paths.get(pathStr)))
+      .map(path =>
+        if (os.isDir(path)) path.toString.validNec[String]
+        else errMessage.invalidNec[String])
 
-  val outputOpt: Opts[os.Path] = Opts
-    .option[Path](
-      long = "output",
-      help = "The root directory to place the organized photos (absolute path)"
-    )
-    .mapValidated { nativePath =>
-      // for now, only absolute paths
-      try {
-        val path = os.Path(nativePath)
-        val exists = os.exists(path)
-        val isDir = os.isDir(path)
-        if (!exists || isDir) {
-          Validated.valid(path)
-        } else {
-          Validated.invalidNel("output: It's not a directory, an absolute path is required")
-        }
-      } catch {
-        case ex: Throwable =>
-          Validated.invalidNel(ex.getMessage)
-      }
-    }
+  def sourceOpt[F[_]: Sync]: Opts[F[ValidatedNec[String, String]]] =
+    Opts
+      .option[String](
+        long = "source",
+        help = "The root directory to pick the photos to organize recursively (absolute path)."
+      )
+      .map(pathStr =>
+        // for now, only absolute paths
+        toDirPath(pathStr, "source: It's not a directory, an absolute path is required"))
 
-  def run(source: os.Path, output: os.Path, dryRun: Boolean): Unit = {
-    val args = FileOrganizerTask.Arguments(inputRoot = source, outputBaseRoot = output, dryRun = dryRun)
-    val logger = new SimpleLogger
-    new FileOrganizerTask(logger).run(args)
-  }
+  def outputOpt[F[_]: Sync]: Opts[F[ValidatedNec[String, String]]] =
+    Opts
+      .option[String](
+        long = "output",
+        help = "The root directory to place the organized photos (absolute path)"
+      )
+      .map(pathStr =>
+        // for now, only absolute paths
+        toDirPath(pathStr, "output: It's not a directory, an absolute path is required"))
+
+  def run[F[_]: Sync](
+      sourceF: F[ValidatedNec[String, String]],
+      outputF: F[ValidatedNec[String, String]],
+      dryRun: Boolean): F[ExitCode] =
+    for {
+      sourceV <- sourceF
+      outputV <- outputF
+      args <- Sync[F].delay((sourceV, outputV).mapN((sourcePath, outputPath) =>
+        FileOrganizerTask.Arguments(inputRoot = sourcePath, outputBaseRoot = outputPath, dryRun = dryRun)))
+      result <- new FileOrganizerTask[F](new SimpleLogger).run(args).map {
+        case Invalid(e) => ExitCode.Error
+        case _ => ExitCode.Success
+      }
+    } yield result
 
   def findPotentialDate(sourceFile: os.Path): Set[String] = {
     def f = {
