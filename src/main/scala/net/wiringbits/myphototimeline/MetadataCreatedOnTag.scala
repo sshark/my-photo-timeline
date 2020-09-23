@@ -41,23 +41,6 @@ object MetadataCreatedOnTag {
           .headOption)
     } yield result).flatMap(d => getCreationDateFromFilenameIfNotFoundInMetadata(d, sourceFile))
 
-/*
-  {
-    val metadata = ImageMetadataReader.readMetadata(sourceFile.toIO)
-    Try(metadata.getDirectories.asScala.flatMap { d =>
-      d.getTags.asScala
-        .filter { t =>
-          MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase)
-        }
-        .map(_.getDescription)
-        .flatMap(Option.apply)
-        .flatMap(MetadataCreatedOnTag.toDate)
-    }.toList)
-      .flatMap(xs => if (xs.isEmpty) Failure(new Throwable("No creation date found")) else Success(xs.head))
-      .toOption
-  }
-*/
-
   private def getCreationDateFromFilenameIfNotFoundInMetadata[F[_]: Sync](
       date: Option[LocalDate],
       sourceFile: os.Path) =

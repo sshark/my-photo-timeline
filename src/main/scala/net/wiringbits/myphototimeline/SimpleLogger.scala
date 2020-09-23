@@ -1,19 +1,19 @@
 package net.wiringbits.myphototimeline
 
-class SimpleLogger {
+import cats.effect.Sync
+import cats.syntax.all._
 
-  def info(msg: String): Unit = {
-    System.err.println(msg)
-  }
+class SimpleLogger[F[_]: Sync] {
 
-  def warn(msg: String): Unit = {
-    System.err.println(s"${fansi.Color.Yellow("WARNING")}: $msg")
-  }
+  def info(msg: String): F[Unit] =
+    Sync[F].delay(System.err.println(msg))
 
-  def fatal(msg: String): Unit = {
-    System.err.println(s"${fansi.Color.Red("FATAL")}: $msg")
-    System.err.println(
-      "Please report this problem so that it gets fixed: https://github.com/wiringbits/my-photo-timeline/issues"
-    )
-  }
+  def warn(msg: String): F[Unit] =
+    Sync[F].delay(System.err.println(s"${fansi.Color.Yellow("WARNING")}: $msg"))
+
+  def fatal(msg: String): F[Unit] =
+    Sync[F].delay(System.err.println(s"${fansi.Color.Red("FATAL")}: $msg")) *>
+      Sync[F].delay(
+        System.err.println(
+          "Please report this problem so that it gets fixed: https://github.com/wiringbits/my-photo-timeline/issues"))
 }

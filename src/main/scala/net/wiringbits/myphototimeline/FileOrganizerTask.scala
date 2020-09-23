@@ -20,7 +20,7 @@ object FileOrganizerTask {
   }
 }
 
-class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger) {
+class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
 
   import FileOrganizerTask._
 
@@ -32,27 +32,27 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger) {
 
   def run(args: Arguments): F[ValidatedNec[String, Unit]] = {
     for {
-      _ <- Sync[F].delay(logger.info("Loading already processed files, it may take some minutes, be patient"))
+      _ <- logger.info("Loading already processed files, it may take some minutes, be patient")
       loadedOutputRoot <- FileOrganizerService.load(args.outputRoot)(trackProgress)
       (processedFiles, invalidProcessedFiles) = loadedOutputRoot
-      _ <- Sync[F].delay(logger.info(s"Already processed files loaded: ${processedFiles.size}"))
+      _ <- logger.info(s"Already processed files loaded: ${processedFiles.size}")
       _ <- if (invalidProcessedFiles.isEmpty)
         Sync[F].delay(
           logger.warn(
             s"There are ${invalidProcessedFiles.size} files on the output folder without enough metadata to process, which you need to organize manually"
           ))
       else Sync[F].unit
-      _ <- Sync[F].delay(logger.info("Loading files to process, it may take some minutes, be patient"))
+      _ <- logger.info("Loading files to process, it may take some minutes, be patient")
       loadedInputRoot <- FileOrganizerService.load(args.inputRoot)(trackProgress)
       (filesToProcess, invalidFilesToProcess) = loadedInputRoot
-      _ <- Sync[F].delay(logger.info(s"Files to process loaded: ${filesToProcess.size}"))
+      _ <- logger.info(s"Files to process loaded: ${filesToProcess.size}")
       _ <- if (invalidFilesToProcess.nonEmpty)
         Sync[F].delay(
           logger.warn(
             s"There are ${invalidFilesToProcess.size} files on the input folder without enough metadata to process"
           ))
       else Sync[F].unit
-      _ <- Sync[F].delay(logger.info(s"Indexing now... it may take some minutes, be patient"))
+      _ <- logger.info(s"Indexing now... it may take some minutes, be patient")
       allFiles = filesToProcess.data.keys.foldLeft(processedFiles) {
         case (acc, currentHash) =>
           acc + filesToProcess.data.getOrElse(currentHash, List.empty)
@@ -71,28 +71,28 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger) {
                 (items ::: newDuplicated, newUnique)
               }
         }
-      _ <- Sync[F].delay(logger.info("Initial indexing done"))
-      _ <- Sync[F].delay(logger.info(s"- Unique files: ${allFiles.size}"))
-      _ <- Sync[F].delay(logger.info(s"- Already organized files: ${processedFiles.size}"))
-      _ <- Sync[F].delay(logger.info(s"- New duplicated files: ${newDuplicated.size}"))
-      _ <- Sync[F].delay(logger.info(s"- New unique files to organize: ${newUnique.size}"))
+      _ <- logger.info("Initial indexing done")
+      _ <- logger.info(s"- Unique files: ${allFiles.size}")
+      _ <- logger.info(s"- Already organized files: ${processedFiles.size}")
+      _ <- logger.info(s"- New duplicated files: ${newDuplicated.size}")
+      _ <- logger.info(s"- New unique files to organize: ${newUnique.size}")
       _ <- if (args.dryRun)
-        Sync[F].delay(logger.info("Files not affected because dry-run is enabled")) *> Sync[F].delay(
+        logger.info("Files not affected because dry-run is enabled") *> Sync[F].delay(
           logger.info("Remember to remove the --dry-run option to actually organize the photos"))
       else {
         // Move duplicated files
-        Sync[F].delay(logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}")) *>
+        logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}") *>
           Sync[F].delay(newDuplicated.zipWithIndex.foreach {
             case (file, index) =>
               trackProgress(current = index, total = newDuplicated.size)
               FileOrganizerService
                 .safeMove(destinationDirectory = os.Path(args.duplicatedRoot), sourceFile = file.source)
-          }) *> Sync[F].delay(logger.info(s"Moving invalid files to: ${args.invalidRoot}")) *>
+          }) *> logger.info(s"Moving invalid files to: ${args.invalidRoot}") *>
           Sync[F].delay(invalidFilesToProcess.zipWithIndex.foreach {
             case (file, index) =>
               trackProgress(current = index, total = invalidFilesToProcess.size)
               FileOrganizerService.safeMove(destinationDirectory = os.Path(args.invalidRoot), sourceFile = file)
-          }) *> Sync[F].delay(logger.info(s"Organizing unique files to: ${args.outputRoot}")) *>
+          }) *> logger.info(s"Organizing unique files to: ${args.outputRoot}") *>
           Sync[F].delay(newUnique.zipWithIndex.foreach {
             case (file, index) =>
               trackProgress(current = index, total = newDuplicated.size)
@@ -101,22 +101,20 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger) {
                 sourceFile = file.source,
                 createdOn = file.createdOn
               )
-          }) *> Sync[F].delay(logger.info("Cleaning up empty directories")) *>
-          Sync[F].delay(FileOrganizerService.cleanEmptyDirectories(os.Path(args.inputRoot))) *>
-          Sync[F].delay(FileOrganizerService.cleanEmptyDirectories(os.Path(args.outputRoot)))
+          }) *> logger.info("Cleaning up empty directories") *>
+          FileOrganizerService.cleanEmptyDirectories(os.Path(args.inputRoot)) *>
+          FileOrganizerService.cleanEmptyDirectories(os.Path(args.outputRoot))
       }
-      _ <- Sync[F].delay(logger.info("Done"))
-      _ <- Sync[F]
-        .pure("""
-            |I hope you found the app useful.
-            |
-            |When I was looking for one, I was willing to pay $100 USD for it but found nothing fulfilling my needs.
-            |any donations are welcome:
-            |- Bitcoin: bc1qf37j0wutmn9ngkpn8v7mknukn3f0cmvq3p7dzf
-            |- Ethereum: 0x02D1f6b4992fD147F19525150b97509D2eaAa651
-            |- Litecoin: LWYPqEYG6fQdvCWCKWvFygskNTptqxuUHu
-            |""".stripMargin)
-        .map(text => logger.info(text))
+      _ <- logger.info("Done")
+      _ <- logger.info("""
+                         |I hope you found the app useful.
+                         |
+                         |When I was looking for one, I was willing to pay $100 USD for it but found nothing fulfilling my needs.
+                         |any donations are welcome:
+                         |- Bitcoin: bc1qf37j0wutmn9ngkpn8v7mknukn3f0cmvq3p7dzf
+                         |- Ethereum: 0x02D1f6b4992fD147F19525150b97509D2eaAa651
+                         |- Litecoin: LWYPqEYG6fQdvCWCKWvFygskNTptqxuUHu
+                         |""".stripMargin)
     } yield ().validNec
   }
 

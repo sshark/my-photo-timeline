@@ -99,30 +99,21 @@ object CommandAppHelper {
       outputV <- outputF
       args <- Sync[F].delay((sourceV, outputV).mapN((sourcePath, outputPath) =>
         FileOrganizerTask.Arguments(inputRoot = sourcePath, outputBaseRoot = outputPath, dryRun = dryRun)))
-      result <- new FileOrganizerTask[F](new SimpleLogger).run(args).map {
+      result <- new FileOrganizerTask[F](new SimpleLogger[F]).run(args).map {
         case Invalid(e) => ExitCode.Error
         case _ => ExitCode.Success
       }
     } yield result
 
-  def findPotentialDate(sourceFile: os.Path): Set[String] = {
-    def f = {
-      val metadata = ImageMetadataReader.readMetadata(sourceFile.toIO)
-      metadata.getDirectories.asScala.flatMap { d =>
-        d.getTags.asScala
-          .filterNot { t =>
-            MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase)
-          }
+  def findPotentialDate[F[_]: Sync](sourceFile: os.Path): F[Set[String]] = {
+    for {
+      metadata <- Sync[F].delay(ImageMetadataReader.readMetadata(sourceFile.toIO))
+      tags <- Sync[F].delay(metadata.getDirectories.asScala.flatMap(
+        _.getTags.asScala
+          .filterNot(t => MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase))
           .filter(_.getTagName.toLowerCase.contains("date"))
-          .map { t =>
-            t.getTagName
-          }
-      }.toSet
-    }
-
-    try f
-    catch {
-      case _: Throwable => Set.empty
-    }
+          .map(_.getTagName)
+      ).toSet)
+    } yield tags
   }
 }
