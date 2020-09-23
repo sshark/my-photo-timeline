@@ -2,8 +2,7 @@ package net.wiringbits.myphototimeline
 
 import java.nio.file.Paths
 
-import cats.Traverse
-import cats.data.Validated.{Invalid, Valid}
+import cats.data.Validated.Invalid
 import cats.data.ValidatedNec
 import cats.effect.{ExitCode, Sync}
 import cats.syntax.all._
@@ -65,7 +64,7 @@ object CommandAppHelper {
 
   private def toDirPath[F[_]: Sync](pathStr: String, errMessage: String): F[ValidatedNec[String, String]] =
     Sync[F]
-      .delay(os.Path(Paths.get(pathStr)))
+      .delay(os.Path(Paths.get(pathStr).toAbsolutePath))
       .map(path =>
         if (os.isDir(path)) path.toString.validNec[String]
         else errMessage.invalidNec[String])
