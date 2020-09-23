@@ -36,21 +36,19 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
       loadedOutputRoot <- FileOrganizerService.load(args.outputRoot)(trackProgress)
       (processedFiles, invalidProcessedFiles) = loadedOutputRoot
       _ <- logger.info(s"Already processed files loaded: ${processedFiles.size}")
-      _ <- if (invalidProcessedFiles.isEmpty)
-        Sync[F].delay(
-          logger.warn(
-            s"There are ${invalidProcessedFiles.size} files on the output folder without enough metadata to process, which you need to organize manually"
-          ))
+      _ <- if (invalidProcessedFiles.nonEmpty)
+        logger.warn(
+          s"There are ${invalidProcessedFiles.size} files on the output folder without enough metadata to process, which you need to organize manually"
+        )
       else Sync[F].unit
       _ <- logger.info("Loading files to process, it may take some minutes, be patient")
       loadedInputRoot <- FileOrganizerService.load(args.inputRoot)(trackProgress)
       (filesToProcess, invalidFilesToProcess) = loadedInputRoot
       _ <- logger.info(s"Files to process loaded: ${filesToProcess.size}")
       _ <- if (invalidFilesToProcess.nonEmpty)
-        Sync[F].delay(
-          logger.warn(
-            s"There are ${invalidFilesToProcess.size} files on the input folder without enough metadata to process"
-          ))
+        logger.warn(
+          s"There are ${invalidFilesToProcess.size} files on the input folder without enough metadata to process"
+        )
       else Sync[F].unit
       _ <- logger.info(s"Indexing now... it may take some minutes, be patient")
       allFiles = filesToProcess.data.keys.foldLeft(processedFiles) {
@@ -81,32 +79,17 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
           logger.info("Remember to remove the --dry-run option to actually organize the photos"))
       else {
         // Move duplicated files
-        logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}") *>
-          Sync[F].delay(newDuplicated.zipWithIndex.foreach {
-            case (file, index) =>
-              trackProgress(current = index, total = newDuplicated.size)
-              FileOrganizerService
-                .safeMove(destinationDirectory = os.Path(args.duplicatedRoot), sourceFile = file.source)
-          }) *> logger.info(s"Moving invalid files to: ${args.invalidRoot}") *>
-          Sync[F].delay(invalidFilesToProcess.zipWithIndex.foreach {
-            case (file, index) =>
-              trackProgress(current = index, total = invalidFilesToProcess.size)
-              FileOrganizerService.safeMove(destinationDirectory = os.Path(args.invalidRoot), sourceFile = file)
-          }) *> logger.info(s"Organizing unique files to: ${args.outputRoot}") *>
-          Sync[F].delay(newUnique.zipWithIndex.foreach {
-            case (file, index) =>
-              trackProgress(current = index, total = newDuplicated.size)
-              FileOrganizerService.organizeByDate(
-                destinationDirectory = os.Path(args.outputRoot),
-                sourceFile = file.source,
-                createdOn = file.createdOn
-              )
-          }) *> logger.info("Cleaning up empty directories") *>
+        logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}") *> moveFiles(
+          newDuplicated,
+          newUnique,
+          invalidFilesToProcess,
+          args) *> logger.info("Cleaning up empty directories") *>
           FileOrganizerService.cleanEmptyDirectories(os.Path(args.inputRoot)) *>
           FileOrganizerService.cleanEmptyDirectories(os.Path(args.outputRoot))
       }
       _ <- logger.info("Done")
-      _ <- logger.info("""
+      _ <- logger.info(
+        """
                          |I hope you found the app useful.
                          |
                          |When I was looking for one, I was willing to pay $100 USD for it but found nothing fulfilling my needs.
@@ -118,7 +101,47 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
     } yield ().validNec
   }
 
-  private def trackProgress(current: Int, total: Int): F[Unit] = Sync[F].delay{
+  private def moveFiles(
+      newDuplicated: List[FileDetails],
+      newUnique: List[FileDetails],
+      invalidFilesToProcess: List[os.Path],
+      args: Arguments): F[Unit] =
+    fs2.Stream
+      .emits(newDuplicated.zipWithIndex)
+      .flatMap {
+        case (file, index) =>
+          fs2.Stream.eval(
+            trackProgress(current = index, total = newDuplicated.size) *>
+              FileOrganizerService
+                .safeMove(destinationDirectory = os.Path(args.duplicatedRoot), sourceFile = file.source))
+      }
+      .compile
+      .drain *> logger.info(s"Moving invalid files to: ${args.invalidRoot}") *>
+      fs2.Stream
+        .emits(invalidFilesToProcess.zipWithIndex)
+        .flatMap {
+          case (file, index) =>
+            fs2.Stream.eval(trackProgress(current = index, total = invalidFilesToProcess.size) *>
+              FileOrganizerService.safeMove(destinationDirectory = os.Path(args.invalidRoot), sourceFile = file))
+        }
+        .compile
+        .drain *> logger.info(s"Organizing unique files to: ${args.outputRoot}") *>
+      fs2.Stream
+        .emits(newUnique.zipWithIndex)
+        .flatMap {
+          case (file, index) =>
+            fs2.Stream.eval(
+              trackProgress(current = index, total = newDuplicated.size) *>
+                FileOrganizerService.organizeByDate(
+                  destinationDirectory = os.Path(args.outputRoot),
+                  sourceFile = file.source,
+                  createdOn = file.createdOn
+                ))
+        }
+        .compile
+        .drain
+
+  private def trackProgress(current: Int, total: Int): F[Unit] = {
     def percent(x: Int): Int = {
       (100 * (x * 1.0 / total)).toInt
     }
@@ -128,8 +151,8 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
       val previous = percent(current - 1)
       if (currentPercent > previous && currentPercent % 5 == 0) {
         logger.info(fansi.Color.Blue(s"Progress: $currentPercent%").render)
-      }
-    }
+      } else Sync[F].unit
+    } else Sync[F].unit
   }
 
   private def createDir(pathStr: String): F[ValidatedNec[String, Boolean]] =

@@ -98,9 +98,10 @@ object CommandAppHelper {
       outputV <- outputF
       args <- Sync[F].delay((sourceV, outputV).mapN((sourcePath, outputPath) =>
         FileOrganizerTask.Arguments(inputRoot = sourcePath, outputBaseRoot = outputPath, dryRun = dryRun)))
-      result <- new FileOrganizerTask[F](new SimpleLogger[F]).run(args).map {
-        case Invalid(e) => ExitCode.Error
-        case _ => ExitCode.Success
+      logger = new SimpleLogger[F]
+      result <- new FileOrganizerTask[F](logger).run(args).flatMap {
+        case Invalid(e) => e.map(logger.fatal).sequence *> Sync[F].pure(ExitCode.Error)
+        case _ => Sync[F].pure(ExitCode.Success)
       }
     } yield result
 
