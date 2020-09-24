@@ -7,7 +7,7 @@ import cats.syntax.all._
 import com.drew.imaging.ImageMetadataReader
 
 import scala.jdk.CollectionConverters._
-import scala.util.{Failure, Try, Success}
+import scala.util.Try
 
 object MetadataCreatedOnTag {
   private val regex = """(\d\d\d\d).(\d\d).(\d\d).*""".r
@@ -43,7 +43,7 @@ object MetadataCreatedOnTag {
 
   private def getCreationDateFromFilenameIfNotFoundInMetadata[F[_]: Sync](
       date: Option[LocalDate],
-      sourceFile: os.Path) =
+      sourceFile: os.Path): F[Option[LocalDate]] =
     if (date.isDefined) Sync[F].pure(date) else getCreationDateFromFilename(sourceFile)
 
 
