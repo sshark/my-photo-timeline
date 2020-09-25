@@ -3,8 +3,10 @@ package net.wiringbits.myphototimeline
 case class IndexedFiles(data: Map[String, List[FileDetails]]) {
 
   def +(fileDetails: FileDetails): IndexedFiles = {
-    val newData = fileDetails :: data.getOrElse(fileDetails.hash, List.empty)
-    copy(data = data + (fileDetails.hash -> newData))
+    fileDetails.hash.fold(this) { hashString =>
+      val newData = fileDetails :: data.getOrElse(hashString, List.empty)
+      copy(data = data + (hashString -> newData))
+    }
   }
 
   def +(list: List[FileDetails]): IndexedFiles = {

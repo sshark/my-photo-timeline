@@ -27,7 +27,7 @@ object FileOrganizerService {
           }
         })
 
-  def load[F[_]: Sync](root: String)(trackProgress: (Int, Int) => F[Unit]): F[(IndexedFiles, List[os.Path])] =
+  def load[F[_]: Sync](root: String)(trackProgress: (Int, Int) => F[Unit]): F[(IndexedFiles, List[FileDetails])] =
     for {
       osRoot <- Sync[F].delay(os.Path(root))
       input <- Sync[F].delay(if (os.exists(osRoot)) os.walk(osRoot).filter(os.isFile) else List.empty)
@@ -39,7 +39,7 @@ object FileOrganizerService {
               fs2.Stream.eval(trackProgress(index, total)).flatMap(_ =>
               fs2.Stream.eval(MetadataCreatedOnTag
                 .getCreationDate(sourceFile))
-                .map(_.fold(sourceFile.asLeft[FileDetails])(createdOn => FileDetails(sourceFile, createdOn,  computeHash(sourceFile)).asRight[Path])))
+                .map(_.fold(FileDetails(sourceFile).asLeft[FileDetails])(createdOn => FileDetails(sourceFile, Some(createdOn),  Some(computeHash(sourceFile))).asRight[FileDetails])))
           }.compile.toList.map(_.partition(_.isLeft))
       (left, right) = leftAndRight
       invalid = left.flatMap(_.left.toOption)
@@ -60,10 +60,10 @@ object FileOrganizerService {
     } yield ()
   }
 
-  def safeMove[F[_]: Sync](destinationDirectory: os.Path, sourceFile: os.Path): F[Unit] =
+  def safeMove[F[_]: Sync](destinationDirectory: os.Path, sourceFile: FileDetails): F[Unit] =
     for {
-      destinationFile <- getAvailablePath(destinationDirectory, sourceFile.last)
-      _ <- Sync[F].delay(os.move(sourceFile, destinationFile, replaceExisting = false, createFolders = true))
+      destinationFile <- getAvailablePath(destinationDirectory, sourceFile.source.last)
+      _ <- Sync[F].delay(os.move(sourceFile.source, destinationFile, replaceExisting = false, createFolders = true))
     } yield ()
   
   def getAvailablePath[F[_]: Sync](parent: os.Path, name: String, suffix: Int = 0): F[os.Path] =

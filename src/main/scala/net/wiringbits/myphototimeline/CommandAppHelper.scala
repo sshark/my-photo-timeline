@@ -104,16 +104,4 @@ object CommandAppHelper {
         case _ => Sync[F].pure(ExitCode.Success)
       }
     } yield result
-
-  def findPotentialDate[F[_]: Sync](sourceFile: os.Path): F[Set[String]] = {
-    for {
-      metadata <- Sync[F].delay(ImageMetadataReader.readMetadata(sourceFile.toIO))
-      tags <- Sync[F].delay(metadata.getDirectories.asScala.flatMap(
-        _.getTags.asScala
-          .filterNot(t => MetadataCreatedOnTag.names.contains(t.getTagName.toLowerCase))
-          .filter(_.getTagName.toLowerCase.contains("date"))
-          .map(_.getTagName)
-      ).toSet)
-    } yield tags
-  }
 }

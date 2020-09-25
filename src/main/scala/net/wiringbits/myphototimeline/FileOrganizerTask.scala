@@ -59,87 +59,86 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
         .foldLeft(List.empty[FileDetails] -> List.empty[FileDetails]) {
           case ((newDuplicated, newUnique), items) =>
             items.headOption
-              .filterNot(f => processedFiles.contains(f.hash))
-              .map { head =>
+              .flatMap(fileDetails =>
+                fileDetails.hash.filterNot(hashString => processedFiles.contains(hashString)).map(_ => fileDetails))
+              .map(head =>
                 // current batch has a new element, pick the first one
-                (items.drop(1) ::: newDuplicated, head :: newUnique)
-              }
-              .getOrElse {
+                (items.drop(1) ::: newDuplicated, head :: newUnique))
+              .getOrElse(
                 // current batch repeated
                 (items ::: newDuplicated, newUnique)
-              }
+              )
         }
-      _ <- logger.info("Initial indexing done")
-      _ <- logger.info(s"- Unique files: ${allFiles.size}")
-      _ <- logger.info(s"- Already organized files: ${processedFiles.size}")
-      _ <- logger.info(s"- New duplicated files: ${newDuplicated.size}")
-      _ <- logger.info(s"- New unique files to organize: ${newUnique.size}")
+      _ <- logger.info(s"""Initial indexing done
+                          |- Unique files: ${allFiles.size}")
+                          |- Already organized files: ${processedFiles.size})
+                          |- New duplicated files: ${newDuplicated.size})
+                          |- New unique files to organize: ${newUnique.size}""".stripMargin)
       _ <- if (args.dryRun)
-        logger.info("Files not affected because dry-run is enabled") *> Sync[F].delay(
-          logger.info("Remember to remove the --dry-run option to actually organize the photos"))
+        logger.info("""Files not affected because dry-run is enabled
+                      |Remember to remove the --dry-run option to actually organize the photos""".stripMargin)
       else {
         // Move duplicated files
-        logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}") *> moveFiles(
-          newDuplicated,
-          newUnique,
-          invalidFilesToProcess,
-          args) *> logger.info("Cleaning up empty directories") *>
-          FileOrganizerService.cleanEmptyDirectories(os.Path(args.inputRoot)) *>
-          FileOrganizerService.cleanEmptyDirectories(os.Path(args.outputRoot))
+        logger.info(s"Moving duplicated files to: ${args.duplicatedRoot}") *>
+          organizeFiles(
+            args,
+            newDuplicated,
+            (args, fileDetails, current, total) => moveFiles(args, fileDetails, current, total)) *>
+          logger.info(s"Moving invalid files to: ${args.invalidRoot}") *>
+          organizeFiles(
+            args,
+            invalidFilesToProcess,
+            (args, fileDetails, current, total) => moveFiles(args, fileDetails, current, total)) *>
+          logger.info(s"Organizing unique files to: ${args.outputRoot}") *>
+          organizeFiles(
+            args,
+            newUnique,
+            (args, fileDetails, current, total) => organizeFilesByDate(args, fileDetails, current, total)) *>
+          logger.info("Cleaning up empty directories") *>
+          fs2.Stream
+            .eval(Sync[F].delay(List(os.Path(args.inputRoot), os.Path(args.outputRoot))))
+            .flatMap(fs2.Stream.apply)
+            .flatMap(path => fs2.Stream.eval(FileOrganizerService.cleanEmptyDirectories(path)))
+            .compile
+            .drain
       }
-      _ <- logger.info("Done")
       _ <- logger.info(
-        """
-                         |I hope you found the app useful.
-                         |
-                         |When I was looking for one, I was willing to pay $100 USD for it but found nothing fulfilling my needs.
-                         |any donations are welcome:
-                         |- Bitcoin: bc1qf37j0wutmn9ngkpn8v7mknukn3f0cmvq3p7dzf
-                         |- Ethereum: 0x02D1f6b4992fD147F19525150b97509D2eaAa651
-                         |- Litecoin: LWYPqEYG6fQdvCWCKWvFygskNTptqxuUHu
-                         |""".stripMargin)
+        """Done.
+         |I hope you found the app useful.
+         |When I was looking for one, I was willing to pay $100 USD for it but found nothing fulfilling my needs.
+         |any donations are welcome:
+         |- Bitcoin: bc1qf37j0wutmn9ngkpn8v7mknukn3f0cmvq3p7dzf
+         |- Ethereum: 0x02D1f6b4992fD147F19525150b97509D2eaAa651
+         |- Litecoin: LWYPqEYG6fQdvCWCKWvFygskNTptqxuUHu
+         |""".stripMargin)
     } yield ().validNec
   }
 
-  private def moveFiles(
-      newDuplicated: List[FileDetails],
-      newUnique: List[FileDetails],
-      invalidFilesToProcess: List[os.Path],
-      args: Arguments): F[Unit] =
+  private def moveFiles(args: Arguments, file: FileDetails, current: Int, total: Int): F[Unit] =
+    trackProgress(current, total) *>
+      FileOrganizerService.safeMove(os.Path(args.duplicatedRoot), file)
+
+  private def organizeFilesByDate(args: Arguments, file: FileDetails, index: Int, total: Int): F[Unit] =
+    file.createdOn.fold(Sync[F].unit)(
+      createdOn =>
+        trackProgress(index, total) *> FileOrganizerService.organizeByDate(
+          os.Path(args.outputRoot),
+          file.source,
+          createdOn
+      ))
+
+  private def organizeFiles(
+      args: Arguments,
+      fileDetailsList: List[FileDetails],
+      f: (Arguments, FileDetails, Int, Int) => F[Unit]): F[Unit] =
     fs2.Stream
-      .emits(newDuplicated.zipWithIndex)
+      .emits(fileDetailsList.zipWithIndex)
       .flatMap {
         case (file, index) =>
-          fs2.Stream.eval(
-            trackProgress(current = index, total = newDuplicated.size) *>
-              FileOrganizerService
-                .safeMove(destinationDirectory = os.Path(args.duplicatedRoot), sourceFile = file.source))
+          fs2.Stream.eval(f(args, file, index, fileDetailsList.size))
       }
       .compile
-      .drain *> logger.info(s"Moving invalid files to: ${args.invalidRoot}") *>
-      fs2.Stream
-        .emits(invalidFilesToProcess.zipWithIndex)
-        .flatMap {
-          case (file, index) =>
-            fs2.Stream.eval(trackProgress(current = index, total = invalidFilesToProcess.size) *>
-              FileOrganizerService.safeMove(destinationDirectory = os.Path(args.invalidRoot), sourceFile = file))
-        }
-        .compile
-        .drain *> logger.info(s"Organizing unique files to: ${args.outputRoot}") *>
-      fs2.Stream
-        .emits(newUnique.zipWithIndex)
-        .flatMap {
-          case (file, index) =>
-            fs2.Stream.eval(
-              trackProgress(current = index, total = newDuplicated.size) *>
-                FileOrganizerService.organizeByDate(
-                  destinationDirectory = os.Path(args.outputRoot),
-                  sourceFile = file.source,
-                  createdOn = file.createdOn
-                ))
-        }
-        .compile
-        .drain
+      .drain
 
   private def trackProgress(current: Int, total: Int): F[Unit] = {
     def percent(x: Int): Int = {
