@@ -16,10 +16,10 @@ object MetadataCreatedOnTag {
   def getCreationDateFromFilename[F[_]: Sync](sourceFile: os.Path): F[Option[LocalDate]] =
     for {
       filename <- Sync[F].delay(sourceFile.last)
-      result <- Sync[F].fromTry(filename match {
+      result <- Sync[F].pure(filename match {
         case filenameRegex(year, month, day) =>
-          Try(Some(LocalDate.of(year.toInt, month.toInt, day.toInt))).recover { case _ => None }
-        case _ => util.Success(None)
+          Either.catchNonFatal(LocalDate.of(year.toInt, month.toInt, day.toInt)).toOption
+        case _ => None
       })
     } yield result
 

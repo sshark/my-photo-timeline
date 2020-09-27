@@ -118,7 +118,7 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
     trackProgress(current, total) *>
       (file match {
         case fp @ PathOnly(source) => FileOrganizerService.safeMove(os.Path(args.duplicatedRoot), fp)
-        case FileDetails(source, createdOn, hash) =>
+        case FileDetails(source, createdOn, _) =>
           FileOrganizerService.organizeByDate(
             os.Path(args.outputRoot),
             source,
