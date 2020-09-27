@@ -1,9 +1,10 @@
 package net.wiringbits.myphototimeline
 
+import cats.data._
+import cats.syntax.all._
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.ValidatedNec
 import cats.effect.Sync
-import cats.syntax.all._
 
 object FileOrganizerTask {
   case class Arguments(inputRoot: String, outputBaseRoot: String, dryRun: Boolean) {
@@ -59,8 +60,7 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
         .foldLeft(List.empty[FileDetails] -> List.empty[FileDetails]) {
           case ((newDuplicated, newUnique), items) =>
             items.headOption
-              .flatMap(fileDetails =>
-                fileDetails.hash.filterNot(hashString => processedFiles.contains(hashString)).map(_ => fileDetails))
+              .filter(fileDetails => processedFiles.contains(fileDetails.hash))
               .map(head =>
                 // current batch has a new element, pick the first one
                 (items.drop(1) ::: newDuplicated, head :: newUnique))
@@ -93,7 +93,7 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
           organizeFiles(
             args,
             newUnique,
-            (args, fileDetails, current, total) => organizeFilesByDate(args, fileDetails, current, total)) *>
+            (args, fileDetails, current, total) => moveFiles(args, fileDetails, current, total)) *>
           logger.info("Cleaning up empty directories") *>
           fs2.Stream
             .eval(Sync[F].delay(List(os.Path(args.inputRoot), os.Path(args.outputRoot))))
@@ -114,23 +114,22 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
     } yield ().validNec
   }
 
-  private def moveFiles(args: Arguments, file: FileDetails, current: Int, total: Int): F[Unit] =
+  private def moveFiles(args: Arguments, file: FileInfo, current: Int, total: Int): F[Unit] =
     trackProgress(current, total) *>
-      FileOrganizerService.safeMove(os.Path(args.duplicatedRoot), file)
-
-  private def organizeFilesByDate(args: Arguments, file: FileDetails, index: Int, total: Int): F[Unit] =
-    file.createdOn.fold(Sync[F].unit)(
-      createdOn =>
-        trackProgress(index, total) *> FileOrganizerService.organizeByDate(
-          os.Path(args.outputRoot),
-          file.source,
-          createdOn
-      ))
+      (file match {
+        case fp @ PathOnly(source) => FileOrganizerService.safeMove(os.Path(args.duplicatedRoot), fp)
+        case FileDetails(source, createdOn, hash) =>
+          FileOrganizerService.organizeByDate(
+            os.Path(args.outputRoot),
+            source,
+            createdOn
+          )
+      })
 
   private def organizeFiles(
       args: Arguments,
-      fileDetailsList: List[FileDetails],
-      f: (Arguments, FileDetails, Int, Int) => F[Unit]): F[Unit] =
+      fileDetailsList: List[FileInfo],
+      f: (Arguments, FileInfo, Int, Int) => F[Unit]): F[Unit] =
     fs2.Stream
       .emits(fileDetailsList.zipWithIndex)
       .flatMap {
@@ -140,18 +139,17 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
       .compile
       .drain
 
-  private def trackProgress(current: Int, total: Int): F[Unit] = {
-    def percent(x: Int): Int = {
-      (100 * (x * 1.0 / total)).toInt
-    }
+  private def trackProgress(current: Int, total: Int): F[Unit] =
+    Option(percentage(current, total))
+      .filter(_ > 0)
+      .filter { currentPercent =>
+        val previous = percentage(current - 1, total)
+        currentPercent > previous && currentPercent % 5 == 0
+      }
+      .fold(Sync[F].unit)(currentPercent => logger.info(fansi.Color.Blue(s"Progress: $currentPercent%").render))
 
-    if (current > 0) {
-      val currentPercent = percent(current)
-      val previous = percent(current - 1)
-      if (currentPercent > previous && currentPercent % 5 == 0) {
-        logger.info(fansi.Color.Blue(s"Progress: $currentPercent%").render)
-      } else Sync[F].unit
-    } else Sync[F].unit
+  private def percentage(x: Int, total: Int): Int = {
+    (100 * (x * 1.0 / total)).toInt
   }
 
   private def createDir(pathStr: String): F[ValidatedNec[String, Boolean]] =

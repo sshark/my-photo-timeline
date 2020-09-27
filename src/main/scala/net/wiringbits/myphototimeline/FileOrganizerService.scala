@@ -2,13 +2,10 @@ package net.wiringbits.myphototimeline
 
 import java.time.LocalDate
 
+import cats.syntax.all._
 import cats.effect.Sync
 import com.google.common.hash.Hashing
 import com.google.common.io.Files
-import cats.syntax.all._
-import os.Path
-
-import scala.annotation.tailrec
 
 object FileOrganizerService {
 
@@ -27,7 +24,7 @@ object FileOrganizerService {
           }
         })
 
-  def load[F[_]: Sync](root: String)(trackProgress: (Int, Int) => F[Unit]): F[(IndexedFiles, List[FileDetails])] =
+  def load[F[_]: Sync](root: String)(trackProgress: (Int, Int) => F[Unit]): F[(IndexedFiles, List[FileInfo])] =
     for {
       osRoot <- Sync[F].delay(os.Path(root))
       input <- Sync[F].delay(if (os.exists(osRoot)) os.walk(osRoot).filter(os.isFile) else List.empty)
@@ -39,7 +36,7 @@ object FileOrganizerService {
               fs2.Stream.eval(trackProgress(index, total)).flatMap(_ =>
               fs2.Stream.eval(MetadataCreatedOnTag
                 .getCreationDate(sourceFile))
-                .map(_.fold(FileDetails(sourceFile).asLeft[FileDetails])(createdOn => FileDetails(sourceFile, Some(createdOn),  Some(computeHash(sourceFile))).asRight[FileDetails])))
+                .map(_.fold(PathOnly(sourceFile).asLeft[FileDetails])(createdOn => FileDetails(sourceFile, createdOn,  computeHash(sourceFile)).asRight[PathOnly])))
           }.compile.toList.map(_.partition(_.isLeft))
       (left, right) = leftAndRight
       invalid = left.flatMap(_.left.toOption)
@@ -60,7 +57,7 @@ object FileOrganizerService {
     } yield ()
   }
 
-  def safeMove[F[_]: Sync](destinationDirectory: os.Path, sourceFile: FileDetails): F[Unit] =
+  def safeMove[F[_]: Sync](destinationDirectory: os.Path, sourceFile: PathOnly): F[Unit] =
     for {
       destinationFile <- getAvailablePath(destinationDirectory, sourceFile.source.last)
       _ <- Sync[F].delay(os.move(sourceFile.source, destinationFile, replaceExisting = false, createFolders = true))
