@@ -70,9 +70,9 @@ class FileOrganizerTask[F[_]: Sync](logger: SimpleLogger[F]) {
               )
         }
       _ <- logger.info(s"""Initial indexing done
-                          |- Unique files: ${allFiles.size}")
-                          |- Already organized files: ${processedFiles.size})
-                          |- New duplicated files: ${newDuplicated.size})
+                          |- Unique files: ${allFiles.size}
+                          |- Already organized files: ${processedFiles.size}
+                          |- New duplicated files: ${newDuplicated.size}
                           |- New unique files to organize: ${newUnique.size}""".stripMargin)
       _ <- if (args.dryRun)
         logger.info("""Files not affected because dry-run is enabled

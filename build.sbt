@@ -2,20 +2,20 @@ import sbt.TupleSyntax.t2ToTable2
 import java.nio.file.{CopyOption, Files, StandardCopyOption}
 import java.io.File
 
-val copyNativeImageEtc = taskKey[Unit]("Copy native-image configurations to target")
+val copyNativeImageConfigs = taskKey[Unit]("Copy native-image configurations to target")
 
-copyNativeImageEtc := ((baseDirectory, target) map { (base, trg) =>
+copyNativeImageConfigs := ((baseDirectory, target) map { (base, trg) =>
   {
-    Some(new File(trg, "native-image/etc").toPath)
+    Some(new File(trg, "native-image/META-INF/native-image").toPath)
       .filterNot(p => Files.isDirectory(p))
       .foreach(p => Files.createDirectories(p))
-    new File(base, "etc")
+    new File(base, "META-INF/native-image")
       .listFiles()
       .foreach(
         file =>
           Files.copy(
             file.toPath,
-            new File(trg, s"native-image/etc/${file.getName}").toPath,
+            new File(trg, s"native-image/META-INF/native-image/${file.getName}").toPath,
             StandardCopyOption.REPLACE_EXISTING)
       )
   }
@@ -40,6 +40,12 @@ lazy val root = (project in file("."))
       "co.fs2" %% "fs2-core" % "2.4.0"
     ),
     Compile / mainClass := Some("net.wiringbits.myphototimeline.Main"),
-    nativeImageOptions ++= List("--no-fallback", "-H:ReflectionConfigurationFiles=etc/reflectconfig.json"),
-    nativeImage := (nativeImage dependsOn copyNativeImageEtc).value
+    nativeImageOptions ++= List(
+      "--no-fallback",
+      "-H:+AddAllCharsets",
+      "-H:ReflectionConfigurationFiles=META-INF/native-image/reflect-config.json",
+      "-H:ResourceConfigurationFiles=META-INF/native-image/resource-config.json"
+    ),
+    nativeImage := (nativeImage dependsOn copyNativeImageConfigs).value
   )
+
